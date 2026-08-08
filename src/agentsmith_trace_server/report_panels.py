@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 import json
+from datetime import datetime
 from typing import Any, Callable
 from urllib.parse import quote
 
@@ -17,6 +18,8 @@ from agentsmith_trace_server.report_agent_labels import (
 )
 from agentsmith_trace_server.report_call_stack import (
     KIND_SKILL,
+    KIND_SUBAGENT,
+    KIND_TODOS,
     KIND_TURN_COMPLETE,
     KIND_TURN_PROMPT,
     KIND_USER_MESSAGE,
@@ -29,6 +32,7 @@ from agentsmith_trace_server.report_call_stack import (
     activity_kind,
     build_stack_forest,
     metadata_of,
+    parse_time,
     reference_label,
 )
 from agentsmith_trace_server.report_tool_icons import (
@@ -94,15 +98,59 @@ PILL_BY_ROLE = {
 }
 STACK_TITLE_PREFIX = {
     ROLE_ROOT: "",
-    ROLE_CLASS: "class ",
-    ROLE_SKILL: "skill ",
-    ROLE_SKILL_REF: "ref ",
+    ROLE_CLASS: "",
+    ROLE_SKILL: "",
+    ROLE_SKILL_REF: "",
     ROLE_METHOD: "",
 }
+STACK_ROLE_EMOJI = {
+    ROLE_ROOT: "🤖",
+    ROLE_CLASS: "🐜",
+    ROLE_SKILL: "🛠️",
+    ROLE_SKILL_REF: "🛠️",
+}
+STACK_PILL_LABEL = {
+    ROLE_ROOT: "deep-agent",
+    ROLE_CLASS: "sub-agent",
+    ROLE_SKILL: "skill",
+    ROLE_SKILL_REF: "ref",
+}
+TOOLTIP_MIN_LEN = 36
+CONTENT_PREVIEW_FIRST_MAX = 88
+CONTENT_PREVIEW_END_MAX = 88
+CONTENT_PREVIEW_MIN_SPLIT = 120
 
 
 def esc(value: Any) -> str:
     return html.escape(str(value))
+
+
+def _normalize_preview_text(text: str) -> str:
+    return " ".join(str(text or "").split())
+
+
+def _two_line_ellipsis(
+    text: str,
+    *,
+    first_max: int = CONTENT_PREVIEW_FIRST_MAX,
+    end_max: int = CONTENT_PREVIEW_END_MAX,
+    min_split: int = CONTENT_PREVIEW_MIN_SPLIT,
+) -> str:
+    ## ⬇️ Line 1: beginning + "..."; line 2: "..." + ending (middle omitted)
+    cleaned = _normalize_preview_text(text)
+    if len(cleaned) <= min_split:
+        return cleaned
+    head = cleaned[:first_max].rstrip()
+    tail = cleaned[-end_max:].lstrip()
+    if not head or not tail:
+        return cleaned[: min_split - 1] + "..."
+    return f"{head}...\n...{tail}"
+
+
+def _pre_content_html(text: str) -> str:
+    full = str(text or "")
+    tip_cls, tip_attr = _tip_attrs(full, min_len=CONTENT_PREVIEW_MIN_SPLIT)
+    return f'<pre class="content{tip_cls}"{tip_attr}>{esc(full)}</pre>'
 
 
 def format_content(content: Any) -> str:
@@ -129,10 +177,10 @@ def render_messages(messages: list[dict[str, Any]] | Any) -> str:
     blocks: list[str] = []
     for msg in messages:
         role = esc(msg.get("role", msg.get("type", "unknown")))
-        content_text = esc(format_content(msg.get("content", "")))
+        content_text = _pre_content_html(format_content(msg.get("content", "")))
         blocks.append(
             f'<div class="msg"><div class="role">{role}</div>'
-            f'<pre class="content">{content_text}</pre></div>'
+            f'{content_text}</div>'
         )
     return "".join(blocks)
 
@@ -144,7 +192,7 @@ def render_outputs(outputs: dict[str, Any]) -> str:
     content = outputs.get("content")
     if content not in (None, ""):
         sections.append(
-            f"<h4>Content</h4><pre class=\"content\">{esc(format_content(content))}</pre>"
+            f"<h4>Content</h4>{_pre_content_html(format_content(content))}"
         )
     tool_calls = outputs.get("tool_calls")
     if tool_calls:
@@ -203,6 +251,25 @@ def run_to_dict(run: RunEvent | dict[str, Any]) -> dict[str, Any]:
     return run
 
 
+def _render_raw_inputs_html(inputs_json: dict[str, Any]) -> str:
+    extra_keys = set(inputs_json.keys()) - {"messages", "todos"}
+    if not extra_keys:
+        return ""
+    payload = dict(inputs_json)
+    payload.pop("todos", None)
+    if extra_keys == {"content"} and isinstance(payload.get("content"), str):
+        return f"<h4>Raw inputs</h4>{_pre_content_html(payload['content'])}"
+    if extra_keys == {"args"} and isinstance(payload.get("args"), dict):
+        args_copy = dict(payload["args"])
+        if isinstance(args_copy.get("todos"), list):
+            args_copy = {k: v for k, v in args_copy.items() if k != "todos"}
+        if not args_copy:
+            return ""
+        payload["args"] = args_copy
+    rendered = json.dumps(payload, ensure_ascii=False, indent=2)
+    return f"<h4>Raw inputs</h4>{_pre_content_html(rendered)}"
+
+
 def render_run_panel(
     run: dict[str, Any],
     *,
@@ -215,16 +282,18 @@ def render_run_panel(
     outputs = run.get("outputs", {})
     metadata = run.get("metadata", {})
     detail_link = _detail_link(run_id, detail_url, show_detail_link)
+    todos_block = ""
+    todos_html = _todos_list_html(run)
+    if todos_html:
+        todos_block = f"<h4>Todo list</h4>{todos_html}"
     inputs_extra = ""
-    if inputs_json and (not messages or set(inputs_json.keys()) - {"messages"}):
-        inputs_extra = (
-            f"<h4>Raw inputs</h4>"
-            f"<pre class=\"content\">{esc(json.dumps(inputs_json, ensure_ascii=False, indent=2))}</pre>"
-        )
+    if inputs_json and (not messages or set(inputs_json.keys()) - {"messages", "todos"}):
+        inputs_extra = _render_raw_inputs_html(inputs_json)
     return f"""
     <div class="panel">
       <h4>Input messages</h4>
       {render_messages(messages)}
+      {todos_block}
       {inputs_extra}
       <h4>Output</h4>
       {render_outputs(outputs)}
@@ -237,16 +306,37 @@ def render_run_panel(
 
 def _stack_display_name(node: StackNode) -> str:
     run = node.run
+    meta = metadata_of(run)
+    if node.role == ROLE_ROOT:
+        for key in ("deepagent", "agent_name"):
+            val = meta.get(key)
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+        name = run.get("name")
+        if isinstance(name, str) and name.strip() and name.strip() != "turn_prompt":
+            return name.strip()
+        return "deep-agent"
     if node.role == ROLE_SKILL_REF:
         return reference_label(run)
     if node.role == ROLE_SKILL:
-        skill_id = metadata_of(run).get("skill_id")
+        skill_id = meta.get("skill_id")
         if isinstance(skill_id, str) and skill_id.strip():
             return skill_id.strip()
     if node.role == ROLE_CLASS:
-        name = run.get("name") or activity_kind(run)
+        name = run.get("name") or meta.get("subagent_type") or activity_kind(run)
         return str(name)
     return str(run.get("name") or run.get("run_type") or "run")
+
+
+def _stack_pill_html(role: str) -> str:
+    emoji = STACK_ROLE_EMOJI.get(role, "")
+    label = STACK_PILL_LABEL.get(role) or PILL_BY_ROLE.get(role, "method")
+    emoji_html = (
+        f'<span class="pill-emoji" aria-hidden="true">{emoji}</span> '
+        if emoji
+        else ""
+    )
+    return f'<span class="pill pill-{esc(PILL_BY_ROLE.get(role, "method"))}">{emoji_html}{esc(label)}</span>'
 
 
 def _render_stack_node(
@@ -254,6 +344,8 @@ def _render_stack_node(
     *,
     open_run_id: str | None,
     detail_url_builder: Callable[[str], str] | None,
+    anchor_time: datetime | None,
+    thread_finished: bool,
 ) -> str:
     run = node.run
     run_id = str(run.get("run_id", ""))
@@ -261,14 +353,27 @@ def _render_stack_node(
     detail_url = detail_url_builder(run_id) if detail_url_builder else None
     panel = render_run_panel(run, detail_url=detail_url)
     role = node.role
-    pill = PILL_BY_ROLE.get(role, "method")
     prefix = STACK_TITLE_PREFIX.get(role, "")
     title = _stack_display_name(node)
+    title_full = f"{prefix}{title}"
+    title_tip_cls, title_tip_attr = _tip_attrs(title_full, min_len=24)
+    pill_html = _stack_pill_html(role)
+    param = _run_param_text(run)
+    param_row = _stack_param_row_html(param) if param else ""
+    todos_row = ""
+    if activity_kind(run) == KIND_TODOS or tool_icon_kind(run) == ICON_KIND_WRITE_TODOS:
+        todos_html = _todos_list_html(run)
+        if todos_html:
+            todos_row = f'<div class="stack-summary-todos">{todos_html}</div>'
+    time_label = _format_event_time(run.get("start_time"), anchor_time) or ""
+    status_html = _status_merge_html(run, thread_finished=thread_finished)
     kids = "".join(
         _render_stack_node(
             child,
             open_run_id=open_run_id,
             detail_url_builder=detail_url_builder,
+            anchor_time=anchor_time,
+            thread_finished=thread_finished,
         )
         for child in node.children
     )
@@ -276,12 +381,20 @@ def _render_stack_node(
     return f"""
     <li class="stack-node stack-{esc(role)}">
       <details class="run stack-frame" id="run-{html.escape(run_id)}"{open_attr}>
-        <summary>
-          <span class="pill pill-{esc(pill)}">{esc(pill)}</span>
-          <strong class="stack-title">{esc(prefix)}{esc(title)}</strong>
-          <span class="muted">{esc(run.get('status', ''))}</span>
-          <span class="muted">{esc(run.get('start_time', ''))}</span>
-          <span class="muted"><code>{esc(run_id[:8])}…</code></span>
+        <summary class="stack-summary">
+          <div class="stack-summary-row stack-summary-head">
+            <span class="stack-summary-leading">
+              {pill_html}
+              <strong class="stack-title{title_tip_cls}"{title_tip_attr}>{esc(prefix)}{esc(title)}</strong>
+            </span>
+            <span class="stack-summary-end">
+              {status_html}
+              <span class="stack-time muted">{esc(time_label)}</span>
+              <span class="muted stack-run-id"><code>{esc(run_id[:12])}…</code></span>
+            </span>
+          </div>
+          {param_row}
+          {todos_row}
         </summary>
         {panel}
       </details>
@@ -300,17 +413,21 @@ def render_runs_list(
         return "<p class='muted'>暂无记录。</p>"
     dict_runs = [run_to_dict(run) for run in runs]
     forest = build_stack_forest(dict_runs)
+    anchor_time = _thread_anchor_time(dict_runs)
+    thread_finished = _thread_turn_finished(dict_runs)
     items = "".join(
         _render_stack_node(
             node,
             open_run_id=open_run_id,
             detail_url_builder=detail_url_builder,
+            anchor_time=anchor_time,
+            thread_finished=thread_finished,
         )
         for node in forest
     )
     return (
-        '<p class="sub stack-legend">调用栈：DeepAgent 为根；SubAgent 为 class；'
-        "LLM/工具为 method；技能与 references 单独标记。</p>"
+        '<p class="sub stack-legend">调用栈：🤖 DeepAgent 为根；🐜 SubAgent；'
+        "LLM/工具为 method；🛠️ 技能与 references 单独标记。</p>"
         f'<ul class="call-stack call-stack-root">{items}</ul>'
     )
 
@@ -327,6 +444,9 @@ def render_conversation(runs: list[RunEvent | dict[str, Any]]) -> str:
     """Chat-style transcript derived from LLM runs, with activity chips for other runs."""
     if not runs:
         return '<div class="empty">该线程暂无运行记录。</div>'
+    dict_runs = [run_to_dict(run) for run in runs]
+    anchor_time = _thread_anchor_time(dict_runs)
+    thread_finished = _thread_turn_finished(dict_runs)
     items: list[tuple[int, str, str]] = []
     ctx = AgentConversationContext()
     seen_users: set[str] = set()
@@ -350,6 +470,7 @@ def render_conversation(runs: list[RunEvent | dict[str, Any]]) -> str:
                             text,
                             label="User",
                             start_time=data.get("start_time"),
+                            anchor_time=anchor_time,
                         ),
                     )
                 )
@@ -359,7 +480,7 @@ def render_conversation(runs: list[RunEvent | dict[str, Any]]) -> str:
                 (
                     SORT_DEEP_INVOKE,
                     sort_time,
-                    _deepagent_invoke_chip(data, ctx),
+                    _deepagent_invoke_chip(data, ctx, anchor_time=anchor_time),
                 )
             )
             continue
@@ -370,10 +491,13 @@ def render_conversation(runs: list[RunEvent | dict[str, Any]]) -> str:
                 ctx,
                 seen_users,
                 include_user=include_user_from_llm,
+                anchor_time=anchor_time,
             ):
                 items.append((sort_group, sort_time, html))
             continue
-        items.append((SORT_TOOL, sort_time, _activity_chip(data, ctx)))
+        items.append(
+            (SORT_TOOL, sort_time, _activity_chip(data, ctx, anchor_time=anchor_time, thread_finished=thread_finished))
+        )
     items.sort(key=lambda row: (row[0], row[1]))
     parts: list[str] = [
         '<div class="chat-panel">',
@@ -399,12 +523,17 @@ def _user_message_text(run: dict[str, Any]) -> str:
     return ""
 
 
-def _deepagent_invoke_chip(run: dict[str, Any], ctx: AgentConversationContext) -> str:
+def _deepagent_invoke_chip(
+    run: dict[str, Any],
+    ctx: AgentConversationContext,
+    *,
+    anchor_time: datetime | None = None,
+) -> str:
     speaker = deepagent_invoke_speaker_label(run, ctx)
     inner = _compact_bubble_body(
         speaker,
         "invoked",
-        meta=_format_run_time(run.get("start_time")),
+        meta=_format_event_time(run.get("start_time"), anchor_time),
     )
     return _chat_row(
         ROLE_ASSISTANT,
@@ -508,6 +637,192 @@ def _avatar(role: str) -> str:
     )
 
 
+def _thread_anchor_time(runs: list[dict[str, Any]]) -> datetime | None:
+    times = [parse_time(r.get("start_time")) for r in runs]
+    valid = [t for t in times if t is not None]
+    return min(valid) if valid else None
+
+
+def _format_event_time(value: Any, anchor: datetime | None) -> str | None:
+    """First event shows wall-clock time; later events show +seconds from anchor."""
+    when = parse_time(value)
+    if when is None:
+        return None
+    if anchor is None:
+        return _format_run_time(value)
+    delta = (when - anchor).total_seconds()
+    if abs(delta) < 0.05:
+        return _format_run_time(value)
+    if delta < 0:
+        return _format_run_time(value)
+    return f"+{delta:.2f}s"
+
+
+def _truncate_text(text: str, max_len: int) -> str:
+    if len(text) <= max_len:
+        return text
+    return text[: max_len - 1] + "…"
+
+
+def _llm_stack_detail(run: dict[str, Any], *, max_len: int = 240) -> str | None:
+    if str(run.get("run_type") or "").lower() != RUN_TYPE_LLM:
+        return None
+    outputs = run.get("outputs") if isinstance(run.get("outputs"), dict) else {}
+    content = str(outputs.get("content") or "").strip()
+    if content:
+        return _truncate_text(content, max_len)
+    tool_calls = outputs.get("tool_calls")
+    if isinstance(tool_calls, list) and tool_calls:
+        parts: list[str] = []
+        for tc in tool_calls:
+            if not isinstance(tc, dict):
+                continue
+            name = str(tc.get("name") or "tool").strip()
+            args = tc.get("args") if isinstance(tc.get("args"), dict) else {}
+            suffix = ""
+            if name == "task":
+                sub = args.get("subagent_type")
+                if isinstance(sub, str) and sub.strip():
+                    suffix = f" → {sub.strip()}"
+            else:
+                for key in ("file_path", "path", "command"):
+                    val = args.get(key)
+                    if isinstance(val, str) and val.strip():
+                        suffix = f" → {val.strip()}"
+                        break
+            parts.append(f"{name}{suffix}")
+        if parts:
+            return _truncate_text("calls: " + ", ".join(parts), max_len)
+    usage = outputs.get("token_usage")
+    if isinstance(usage, dict) and usage.get("total_tokens") is not None:
+        return f"tokens: {usage['total_tokens']}"
+    return None
+
+
+def _run_param_text(run: dict[str, Any], *, max_len: int = 240) -> str | None:
+    user_text = _user_message_text(run)
+    if user_text:
+        return _prose_stack_preview(user_text)
+    llm_detail = _llm_stack_detail(run, max_len=max_len)
+    if llm_detail:
+        return llm_detail
+    path = _extract_tool_target_path(run)
+    if path:
+        return _truncate_text(path.strip(), max_len)
+    meta = metadata_of(run)
+    inputs = run.get("inputs") if isinstance(run.get("inputs"), dict) else {}
+    if activity_kind(run) == KIND_SUBAGENT:
+        for key in ("description", "task_description"):
+            val = meta.get(key) or inputs.get(key)
+            if isinstance(val, str) and val.strip():
+                return _prose_stack_preview(val.strip())
+    for key in ("command", "cmd", "description", "task_description"):
+        val = meta.get(key) or inputs.get(key)
+        if isinstance(val, str) and val.strip():
+            return _prose_stack_preview(val.strip())
+    preview = meta.get("args_preview")
+    if isinstance(preview, str) and preview.strip():
+        return _truncate_text(preview.strip(), max_len)
+    return None
+
+
+def _param_code_html(text: str, *, css_class: str = "bubble-param") -> str:
+    tip_cls, tip_attr = _tip_attrs(text, min_len=1)
+    return (
+        f'<code class="{esc(css_class)}{tip_cls}"{tip_attr}>{esc(text)}</code>'
+    )
+
+
+def _stack_param_row_html(text: str) -> str:
+    multiline = "\n" in text
+    multi_cls = " stack-param-multiline" if multiline else ""
+    tip_cls, tip_attr = _tip_attrs(text, min_len=1)
+    return (
+        f'<div class="stack-summary-row stack-summary-param">'
+        f'<span class="stack-param-line{multi_cls}{tip_cls}"{tip_attr}>{esc(text)}</span>'
+        "</div>"
+    )
+
+
+def _tip_attrs(text: str, *, min_len: int = TOOLTIP_MIN_LEN) -> tuple[str, str]:
+    cleaned = str(text or "").strip()
+    if len(cleaned) < min_len:
+        return "", ""
+    return " has-tip", f' title="{esc(cleaned)}"'
+
+
+def _status_pill(label: str, css: str, tip: str | None = None) -> str:
+    tip_attr = f' title="{esc(tip)}"' if tip else ""
+    extra = " has-tip" if tip else ""
+    return (
+        f'<span class="status-pill status-{css}{extra}"{tip_attr}>{esc(label)}</span>'
+    )
+
+
+def _thread_turn_finished(runs: list[dict[str, Any]]) -> bool:
+    for run in runs:
+        if activity_kind(run) == KIND_TURN_COMPLETE:
+            return True
+    return False
+
+
+def _status_merge_html(run: dict[str, Any], *, thread_finished: bool = False) -> str:
+    """Inline pending → success/error pills; tooltip describes the lifecycle."""
+    status = str(run.get("status") or "unknown").strip().lower()
+    meta = metadata_of(run)
+    end_time = run.get("end_time")
+    has_end = end_time is not None and str(end_time).strip()
+    outputs = run.get("outputs") if isinstance(run.get("outputs"), dict) else {}
+    duration = meta.get("duration_ms") or outputs.get("duration_ms")
+
+    if status == "pending" and not has_end:
+        if thread_finished:
+            tip = (
+                "Turn finished — this step completed; "
+                "trace did not record a separate completion event"
+            )
+            return (
+                f'<span class="status-merge has-tip" title="{esc(tip)}">'
+                f'{_status_pill("pending", "pending")}'
+                '<span class="status-merge-arrow" aria-hidden="true">→</span>'
+                f'{_status_pill("success", "success")}'
+                "</span>"
+            )
+        return _status_pill(
+            "pending",
+            "pending",
+            "Still running — wait until the turn finishes",
+        )
+
+    if status == "success":
+        tip_parts = ["pending → success"]
+        if duration is not None:
+            tip_parts.append(f"{duration} ms")
+        elif has_end:
+            tip_parts.append("completed")
+        tip = " · ".join(tip_parts)
+        return (
+            f'<span class="status-merge has-tip" title="{esc(tip)}">'
+            f'{_status_pill("pending", "pending")}'
+            '<span class="status-merge-arrow" aria-hidden="true">→</span>'
+            f'{_status_pill("success", "success")}'
+            "</span>"
+        )
+
+    if status == "error":
+        err = outputs.get("error") or meta.get("error") or "failed"
+        tip = f"pending → error · {err}"
+        return (
+            f'<span class="status-merge has-tip" title="{esc(str(tip))}">'
+            f'{_status_pill("pending", "pending")}'
+            '<span class="status-merge-arrow" aria-hidden="true">→</span>'
+            f'{_status_pill("error", "error")}'
+            "</span>"
+        )
+
+    return _status_pill(status, status, status)
+
+
 def _format_run_time(value: Any) -> str | None:
     text = str(value or "").strip()
     if not text:
@@ -519,6 +834,10 @@ def _format_run_time(value: Any) -> str | None:
     return text
 
 
+def _prose_stack_preview(text: str) -> str:
+    return _two_line_ellipsis(text)
+
+
 def _compact_bubble_body(
     speaker: str,
     text: str,
@@ -526,16 +845,32 @@ def _compact_bubble_body(
     param: str | None = None,
     meta: str | None = None,
     extra_html: str = "",
+    status_html: str = "",
 ) -> str:
+    text_tip_cls, text_tip_attr = _tip_attrs(text, min_len=CONTENT_PREVIEW_MIN_SPLIT)
+    preview = _two_line_ellipsis(text)
+    if preview == text:
+        text_html = (
+            f'<span class="bubble-text{text_tip_cls}"{text_tip_attr}>{esc(text)}</span>'
+        )
+    else:
+        text_html = (
+            f'<span class="bubble-text bubble-text-preview{text_tip_cls}"{text_tip_attr}>'
+            f'{esc(preview)}</span>'
+            f'<span class="bubble-text bubble-text-full">{esc(text)}</span>'
+        )
     main_parts = [
         f'<span class="speaker">{esc(speaker)}</span>',
-        f'<span class="bubble-text">{esc(text)}</span>',
+        text_html,
     ]
+    if status_html:
+        main_parts.append(status_html)
     if param:
-        main_parts.append(f'<code class="bubble-param">{esc(param)}</code>')
+        main_parts.append(_param_code_html(param))
     main = f'<div class="bubble-main">{"".join(main_parts)}</div>'
     meta_html = f'<div class="bubble-meta">{esc(meta)}</div>' if meta else ""
-    return f"{main}{extra_html}{meta_html}"
+    extra_block = f'<div class="bubble-todos">{extra_html}</div>' if extra_html else ""
+    return f"{main}{extra_block}{meta_html}"
 
 
 def _chat_row(
@@ -566,10 +901,15 @@ def _bubble(
     *,
     label: str | None = None,
     start_time: Any = None,
+    anchor_time: datetime | None = None,
 ) -> str:
     css = role if role in {ROLE_USER, ROLE_ASSISTANT, ROLE_SYSTEM} else ROLE_ASSISTANT
     speaker = label or css
-    inner = _compact_bubble_body(speaker, body, meta=_format_run_time(start_time))
+    inner = _compact_bubble_body(
+        speaker,
+        body,
+        meta=_format_event_time(start_time, anchor_time),
+    )
     return _chat_row(css, inner)
 
 
@@ -579,6 +919,7 @@ def _llm_bubble_items(
     seen_users: set[str],
     *,
     include_user: bool = True,
+    anchor_time: datetime | None = None,
 ) -> list[tuple[int, str]]:
     out: list[tuple[int, str]] = []
     messages = run.get("inputs", {}).get("messages", [])
@@ -596,7 +937,13 @@ def _llm_bubble_items(
         out.append(
             (
                 SORT_USER,
-                _bubble(ROLE_USER, last_user, label="User", start_time=run.get("start_time")),
+                _bubble(
+                    ROLE_USER,
+                    last_user,
+                    label="User",
+                    start_time=run.get("start_time"),
+                    anchor_time=anchor_time,
+                ),
             )
         )
     content = run.get("outputs", {}).get("content")
@@ -610,6 +957,7 @@ def _llm_bubble_items(
                     format_content(content),
                     label=speaker,
                     start_time=run.get("start_time"),
+                    anchor_time=anchor_time,
                 ),
             )
         )
@@ -624,6 +972,7 @@ def _llm_bubble_items(
                     f"Error: {error}",
                     label=speaker,
                     start_time=run.get("start_time"),
+                    anchor_time=anchor_time,
                 ),
             )
         )
@@ -703,20 +1052,36 @@ def _tool_target_detail(run: dict[str, Any]) -> str | None:
     path = _extract_tool_target_path(run)
     if not path:
         return None
-    return _format_tool_target_display(path)
+    return path.strip()
+
+
+def _todos_from_run(run: dict[str, Any]) -> list[dict[str, Any]]:
+    inputs = run.get("inputs")
+    if isinstance(inputs, dict):
+        todos = inputs.get("todos")
+        if isinstance(todos, list):
+            return [t for t in todos if isinstance(t, dict)]
+        args = inputs.get("args")
+        if isinstance(args, dict):
+            nested = args.get("todos")
+            if isinstance(nested, list):
+                return [t for t in nested if isinstance(t, dict)]
+    meta = run.get("metadata")
+    if isinstance(meta, dict):
+        args = meta.get("args")
+        if isinstance(args, dict):
+            nested = args.get("todos")
+            if isinstance(nested, list):
+                return [t for t in nested if isinstance(t, dict)]
+    return []
 
 
 def _todos_list_html(run: dict[str, Any]) -> str:
-    inputs = run.get("inputs")
-    if not isinstance(inputs, dict):
-        return ""
-    todos = inputs.get("todos")
-    if not isinstance(todos, list) or not todos:
+    todos = _todos_from_run(run)
+    if not todos:
         return ""
     items: list[str] = []
     for todo in todos:
-        if not isinstance(todo, dict):
-            continue
         content = str(todo.get("content") or "").strip()
         if not content:
             continue
@@ -727,10 +1092,16 @@ def _todos_list_html(run: dict[str, Any]) -> str:
         items.append(f'<li class="todo-item">{status_html}<span>{esc(content)}</span></li>')
     if not items:
         return ""
-    return f'<ul class="todo-list compact">{"".join(items)}</ul>'
+    return f'<ul class="todo-list compact todo-list-full">{"".join(items)}</ul>'
 
 
-def _activity_chip(run: dict[str, Any], ctx: AgentConversationContext) -> str:
+def _activity_chip(
+    run: dict[str, Any],
+    ctx: AgentConversationContext,
+    *,
+    anchor_time: datetime | None = None,
+    thread_finished: bool = False,
+) -> str:
     meta = run.get("metadata") or {}
     if not isinstance(meta, dict):
         meta = {}
@@ -738,7 +1109,6 @@ def _activity_chip(run: dict[str, Any], ctx: AgentConversationContext) -> str:
     tool_name = str(meta.get("tool_name") or run.get("name") or "").strip()
     skill_id = str(meta.get("skill_id") or "").strip()
     kind = esc(run.get("run_type", "run"))
-    status = esc(run.get("status", ""))
     activity = meta.get("activity_kind")
     extra = ""
     if activity and str(activity) != KIND_SKILL:
@@ -754,7 +1124,7 @@ def _activity_chip(run: dict[str, Any], ctx: AgentConversationContext) -> str:
         display_name = esc(" · ".join(label_parts) if label_parts else tool_name or "skill")
     else:
         display_name = esc(tool_name or str(run.get("name") or "tool"))
-    summary = f"{kind}: {display_name} ({status}){extra}"
+    summary = f"{kind}: {display_name}{extra}"
     target = _tool_target_detail(run)
     todos_html = ""
     if icon_kind == ICON_KIND_WRITE_TODOS:
@@ -763,8 +1133,9 @@ def _activity_chip(run: dict[str, Any], ctx: AgentConversationContext) -> str:
         speaker,
         summary,
         param=target,
-        meta=_format_run_time(run.get("start_time")),
+        meta=_format_event_time(run.get("start_time"), anchor_time),
         extra_html=todos_html,
+        status_html=_status_merge_html(run, thread_finished=thread_finished),
     )
     bubble_class = f"{ROLE_TOOL} {icon_kind}"
     return _chat_row(

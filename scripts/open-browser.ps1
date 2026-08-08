@@ -1,12 +1,17 @@
 param(
     [Parameter(ValueFromRemainingArguments = $true)]
-    [string[]]$Urls
+    [string[]]$Urls,
+
+    [switch]$UpdateSession
 )
 
 if (-not $Urls -or $Urls.Count -eq 0) {
     Write-Error "No URLs provided."
     exit 1
 }
+
+$browserProfileDir = Join-Path $env:LOCALAPPDATA "AgentSmith-Trace\browser-profile"
+New-Item -ItemType Directory -Force -Path $browserProfileDir | Out-Null
 
 function Find-Browser {
     param([string]$Name, [string[]]$Candidates)
@@ -29,15 +34,28 @@ $edge = Find-Browser "Edge" @(
     "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe"
 )
 
-$browserArgs = @("--new-window", "--new-instance") + $Urls
+$browserArgs = @(
+    "--user-data-dir=$browserProfileDir",
+    "--new-window",
+    "--new-instance"
+) + $Urls
+
+$browserProc = $null
 
 if ($chrome) {
-    Start-Process -FilePath $chrome -ArgumentList $browserArgs
-    exit 0
+    $browserProc = Start-Process -FilePath $chrome -ArgumentList $browserArgs -PassThru
 }
 
-if ($edge) {
-    Start-Process -FilePath $edge -ArgumentList $browserArgs
+if (-not $browserProc -and $edge) {
+    $browserProc = Start-Process -FilePath $edge -ArgumentList $browserArgs -PassThru
+}
+
+if ($browserProc -and $UpdateSession) {
+    $sessionScript = Join-Path $PSScriptRoot "run-session.ps1"
+    & $sessionScript -Action UpdateBrowser -BrowserPid $browserProc.Id
+}
+
+if ($browserProc) {
     exit 0
 }
 

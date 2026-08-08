@@ -45,7 +45,7 @@ def test_read_file_tool_shows_short_path_from_inputs(tmp_path):
 
     report = client.get(f"/report?user_id={user_id}&thread_id={thread_id}")
     assert report.status_code == 200
-    assert '<code class="bubble-param">foo/SKILL.md</code>' in report.text
+    assert '<code class="bubble-param has-tip" title="/skills/foo/SKILL.md">/skills/foo/SKILL.md</code>' in report.text
     assert "bubble-main" in report.text
 
 
@@ -84,7 +84,10 @@ def test_read_file_activity_shows_short_path_from_args_preview(tmp_path):
 
     report = client.get(f"/report?user_id={user_id}&thread_id={thread_id}")
     assert report.status_code == 200
-    assert '<code class="bubble-param">to/order_actions.md</code>' in report.text
+    assert (
+        '<code class="bubble-param has-tip" title="/path/to/order_actions.md">'
+        "/path/to/order_actions.md</code>" in report.text
+    )
     assert "bubble-main" in report.text
 
 
@@ -119,7 +122,8 @@ def test_skill_used_read_file_shows_short_path_from_metadata(tmp_path):
     report = client.get(f"/report?user_id={user_id}&thread_id={thread_id}")
     assert report.status_code == 200
     assert (
-        '<code class="bubble-param">scenario-discovery/SKILL.md</code>' in report.text
+        '<code class="bubble-param has-tip" title="/skills/scenario-discovery/SKILL.md">'
+        "/skills/scenario-discovery/SKILL.md</code>" in report.text
     )
     assert "read_file" in report.text
 
@@ -166,4 +170,7 @@ def test_skill_read_collapses_duplicate_langchain_tool_row(tmp_path):
     assert "chat-avatar chat-avatar-tool chat-avatar-read_file" not in report.text
     assert "chat-avatar chat-avatar-tool chat-avatar-skill" in report.text
     assert "scenario-discovery · read_file" in report.text
-    assert '<code class="bubble-param">scenario-discovery/SKILL.md</code>' in report.text
+    assert (
+        '<code class="bubble-param has-tip" title="/skills/scenario-discovery/SKILL.md">'
+        "/skills/scenario-discovery/SKILL.md</code>" in report.text
+    )

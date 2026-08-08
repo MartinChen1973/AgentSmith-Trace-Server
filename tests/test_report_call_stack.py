@@ -56,8 +56,8 @@ def test_classify_skill_reference_from_path() -> None:
     run = _run(
         "r1",
         activity="skill_used",
-        skill_id="action-finder",
-        path="/skills/action-finder/references/crud-templates.md",
+        skill_id="requirement-action",
+        path="/skills/requirement-action/references/crud-templates.md",
     )
     assert is_skill_reference(run) is True
     assert classify_role(run) == ROLE_SKILL_REF
@@ -76,7 +76,7 @@ def test_build_stack_with_explicit_parents() -> None:
         ),
         _run(
             "skill",
-            name="action-finder",
+            name="requirement-action",
             activity="skill_used",
             parent="sub",
             skill_id="action-finder",

@@ -141,6 +141,12 @@ def _render_split_home(
     }
     selected_runs: list[RunEvent] = []
     selected_user = user_id
+    if not thread_id:
+        recent = repo.get_most_recent_thread()
+        if recent is not None:
+            thread_id, resolved_user = recent
+            if not selected_user:
+                selected_user = resolved_user
     if thread_id:
         selected_runs = repo.list_by_thread(thread_id)
         if not selected_user and selected_runs:

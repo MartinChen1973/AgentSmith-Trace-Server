@@ -20,7 +20,7 @@ PAGE_CLASS_SPLIT = "split-page"
 EMPTY_SELECT_HINT = "请在左侧选择一个线程，以查看会话内容。"
 TITLE_HOME = "AgentSmith-Trace · Admin"
 HEADING_HOME = "AgentSmith-Trace · Admin"
-SUB_HOME = "左侧为整体活动日志；点击线程后，右侧显示该会话。"
+SUB_HOME = "左侧为整体活动日志；右侧默认展示最近线程的调用栈与会话。"
 
 
 def _page(title: str, body: str, *, crumbs: str = "", body_class: str = PAGE_CLASS_SINGLE) -> str:
@@ -234,15 +234,15 @@ def _right_conversation_pane(
         else ""
     )
     return f"""
-    <h2>会话</h2>
     <div class="session">
       <div>Thread: <code>{esc(selected_thread_id)}</code></div>
       {user_line}
       <div>Runs: <strong>{len(runs)}</strong></div>
       <div>API: <a href="/api/v1/threads/{tid}/runs">JSON</a></div>
     </div>
-    {render_conversation(runs)}
-    <h2>运行详情</h2>
-    <p class="sub">展开查看完整输入、输出与元数据。</p>
+    <h2 id="call-stack">调用栈</h2>
+    <p class="sub">🤖 DeepAgent 根 → 🐜 SubAgent → LLM/工具/🛠️ 技能；展开节点查看详情。</p>
     {render_runs_list(runs, open_run_id=open_run_id)}
+    <h2 id="conversation">会话</h2>
+    {render_conversation(runs)}
     """

@@ -118,6 +118,25 @@ class RunRepository:
             ).fetchall()
         return [self._row_to_event(row) for row in rows]
 
+    def get_most_recent_thread(self) -> tuple[str, str] | None:
+        """Return (thread_id, user_id) for the thread with the latest run activity."""
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    json_extract(metadata_json, '$.thread_id') AS thread_id,
+                    json_extract(metadata_json, '$.user_id') AS user_id
+                FROM runs
+                WHERE json_extract(metadata_json, '$.thread_id') IS NOT NULL
+                GROUP BY thread_id
+                ORDER BY MAX(start_time) DESC
+                LIMIT 1
+                """
+            ).fetchone()
+        if row is None or not row["thread_id"]:
+            return None
+        return str(row["thread_id"]), str(row["user_id"] or "_unknown")
+
     def list_threads_for_user(self, user_id: str) -> list[ThreadSummary]:
         with self._connect() as conn:
             rows = conn.execute(

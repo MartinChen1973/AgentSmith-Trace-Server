@@ -1,8 +1,8 @@
 # agentsmith-trace-server
 
-FastAPI ingestion service for AgentSmith-Trace run events (SQLite storage, report UI, simulator).
+**Canonical** FastAPI ingestion service for AgentSmith-Trace run events (SQLite storage, split-pane `/report` UI with call-stack tree, simulator).
 
-Pair with [`agentsmith-trace-sdk`](https://github.com/MartinChen1973/AgentSmith-Trace) in the SDK repo to capture LangChain LLM calls.
+Pair with [`agentsmith-trace-sdk`](https://github.com/MartinChen1973/AgentSmith-Trace) in the SDK monorepo to capture LangChain LLM calls. The SDK repo keeps a workspace **mirror** of this package for tests only — develop and run the server **here**, not from `AgentSmith-Trace/packages/agentsmith-trace-server`.
 
 ## Quickstart
 

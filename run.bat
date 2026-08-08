@@ -5,6 +5,9 @@ rem Start AgentSmith-Trace-Server and open the admin home page.
 
 cd /d "%~dp0"
 
+echo Cleaning up previous run (server window and browser)...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\run-session.ps1" -Action Cleanup -ProjectRoot "%~dp0."
+
 if exist ".env" (
     for /f "usebackq eol=# tokens=1,* delims==" %%a in (".env") do (
         if not "%%a"=="" set "%%a=%%b"
@@ -56,7 +59,8 @@ set "DOCS_URL=!BASE_URL!/docs"
 set "SIMULATOR_URL=!BASE_URL!/simulator"
 
 echo Starting server at !BASE_URL! ...
-start "AgentSmith-Trace Server" /D "%~dp0" cmd.exe /K "set AGENTSMITH_TRACE_PORT=!AGENTSMITH_TRACE_PORT!&& set AGENTSMITH_TRACE_RELOAD=!AGENTSMITH_TRACE_RELOAD!&& "%~dp0scripts\start-server.cmd""
+for /f "delims=" %%i in ('powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\run-session.ps1" -Action StartServer -ProjectRoot "%~dp0." -Port !AGENTSMITH_TRACE_PORT! -Reload !AGENTSMITH_TRACE_RELOAD!') do set "SERVER_PID=%%i"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\run-session.ps1" -Action WriteSession -ProjectRoot "%~dp0." -ServerPid !SERVER_PID! -BrowserPid 0 -Port !AGENTSMITH_TRACE_PORT! -HomeUrl "!HOME_URL!"
 
 echo Waiting for admin home page...
 set RETRIES=0
@@ -73,7 +77,7 @@ goto WAIT_HOME
 
 :OPEN_BROWSER
 echo Opening admin home: !HOME_URL!
-call "%~dp0scripts\open-browser.bat" "!HOME_URL!"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\open-browser.ps1" -UpdateSession "!HOME_URL!"
 
 echo.
 echo Started:
@@ -83,6 +87,7 @@ echo   Simulator     !SIMULATOR_URL!
 echo   Swagger UI    !DOCS_URL!
 echo.
 echo Theme matches SEAI ai-end /admin ^(dark^). Use Ctrl+F5 if Chrome shows a cached light page.
-echo Close the server window to stop.
+echo Re-run run.bat to stop the previous server and browser, then start fresh.
+echo Close the server window manually to stop without restarting.
 echo.
 pause

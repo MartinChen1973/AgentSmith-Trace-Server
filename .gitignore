@@ -12,3 +12,4 @@ dist/
 build/
 .test-harness/
 test-results/
+.agentsmith-trace-run.json

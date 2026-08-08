@@ -160,7 +160,10 @@ def test_get_run_and_report_drilldown(tmp_path):
     assert "整体日志" in report.text
     assert thread_id in report.text
     assert f"thread_id={thread_id}" in report.text
-    assert "请在左侧选择一个线程" in report.text
+    assert "调用栈" in report.text
+    assert "call-stack-root" in report.text
+    assert "thread-link active" in report.text
+    assert "hello" in report.text
 
     selected = client.get(f"/report?user_id={user_id}&thread_id={thread_id}")
     assert selected.status_code == 200
