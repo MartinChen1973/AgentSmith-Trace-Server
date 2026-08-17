@@ -394,6 +394,71 @@ COMMON_STYLES = """
       border-radius: 999px;
       padding: 0.05rem 0.4rem;
     }
+    .todo-plan-panel,
+    .todo-outcome-panel {
+      margin: 0 0 1rem;
+      padding: 0.75rem 0.9rem;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: rgba(12, 18, 28, 0.55);
+    }
+    .todo-plan-panel h3,
+    .todo-outcome-panel h3 {
+      margin: 0 0 0.35rem;
+      font-size: 0.95rem;
+    }
+    .todo-plan-owner,
+    .todo-outcome-owner {
+      margin-top: 0.65rem;
+    }
+    .todo-plan-owner-title,
+    .todo-outcome-owner-title {
+      margin: 0 0 0.25rem;
+      font-size: 0.82rem;
+      color: var(--accent);
+    }
+    .todo-outcome-list {
+      list-style: none;
+      margin: 0.25rem 0 0;
+      padding: 0;
+    }
+    .todo-outcome-item {
+      display: flex;
+      gap: 0.45rem;
+      align-items: flex-start;
+      padding: 0.28rem 0;
+      font-size: 0.78rem;
+      border-bottom: 1px solid rgba(45, 58, 77, 0.45);
+    }
+    .todo-outcome-item:last-child { border-bottom: none; }
+    .todo-outcome {
+      flex-shrink: 0;
+      font-size: 0.62rem;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+      border-radius: 999px;
+      padding: 0.05rem 0.4rem;
+      border: 1px solid var(--border);
+    }
+    .todo-outcome-done {
+      color: var(--ok);
+      border-color: rgba(61, 158, 111, 0.45);
+      background: rgba(61, 158, 111, 0.12);
+    }
+    .todo-outcome-not_done {
+      color: var(--warn);
+      border-color: rgba(212, 153, 59, 0.45);
+      background: rgba(212, 153, 59, 0.12);
+    }
+    .todo-outcome-added,
+    .todo-outcome-removed,
+    .todo-outcome-revised {
+      color: var(--muted);
+      background: var(--chip-bg);
+    }
+    .todo-outcome-detail {
+      font-size: 0.72rem;
+    }
     .chat-avatar-skill {
       background: rgba(61, 158, 111, 0.22);
       border-color: rgba(61, 158, 111, 0.5);

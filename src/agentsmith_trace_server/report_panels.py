@@ -35,6 +35,10 @@ from agentsmith_trace_server.report_call_stack import (
     parse_time,
     reference_label,
 )
+from agentsmith_trace_server.report_todos import (
+    render_todo_plan_outcome_sections,
+    todos_from_run,
+)
 from agentsmith_trace_server.report_tool_icons import (
     ICON_KIND_SKILL,
     ICON_KIND_WRITE_TODOS,
@@ -412,6 +416,7 @@ def render_runs_list(
     if not runs:
         return "<p class='muted'>暂无记录。</p>"
     dict_runs = [run_to_dict(run) for run in runs]
+    plan_html, outcome_html = render_todo_plan_outcome_sections(dict_runs)
     forest = build_stack_forest(dict_runs)
     anchor_time = _thread_anchor_time(dict_runs)
     thread_finished = _thread_turn_finished(dict_runs)
@@ -425,11 +430,18 @@ def render_runs_list(
         )
         for node in forest
     )
-    return (
+    stack_body = (
         '<p class="sub stack-legend">调用栈：🤖 DeepAgent 为根；🐜 SubAgent；'
         "LLM/工具为 method；🛠️ 技能与 references 单独标记。</p>"
         f'<ul class="call-stack call-stack-root">{items}</ul>'
     )
+    parts: list[str] = []
+    if plan_html:
+        parts.append(plan_html)
+    parts.append(stack_body)
+    if outcome_html:
+        parts.append(outcome_html)
+    return "".join(parts)
 
 
 def _thread_has_user_message(runs: list[RunEvent | dict[str, Any]]) -> bool:
@@ -1056,24 +1068,7 @@ def _tool_target_detail(run: dict[str, Any]) -> str | None:
 
 
 def _todos_from_run(run: dict[str, Any]) -> list[dict[str, Any]]:
-    inputs = run.get("inputs")
-    if isinstance(inputs, dict):
-        todos = inputs.get("todos")
-        if isinstance(todos, list):
-            return [t for t in todos if isinstance(t, dict)]
-        args = inputs.get("args")
-        if isinstance(args, dict):
-            nested = args.get("todos")
-            if isinstance(nested, list):
-                return [t for t in nested if isinstance(t, dict)]
-    meta = run.get("metadata")
-    if isinstance(meta, dict):
-        args = meta.get("args")
-        if isinstance(args, dict):
-            nested = args.get("todos")
-            if isinstance(nested, list):
-                return [t for t in nested if isinstance(t, dict)]
-    return []
+    return todos_from_run(run)
 
 
 def _todos_list_html(run: dict[str, Any]) -> str:
